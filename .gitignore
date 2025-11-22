@@ -1,0 +1,21 @@
+# --- SECRETS (NEVER UPLOAD THESE) ---
+.env
+__pycache__/
+*.log
+
+# --- BIG MEDIA FILES (IGNORED) ---
+*.mp4
+*.mov
+*.wav
+*.mp3
+*.png
+*.jpg
+
+# --- FOLDERS TO IGNORE ---
+input/
+output/
+archive/
+random/
+batch*/
+.venv/
+venv/
