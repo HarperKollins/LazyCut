@@ -36,20 +36,26 @@ for d in [ASSETS_DIR, BROLL_FOLDER, TEMP_DIR]:
 
 # --- BINARY PATHS ---
 def get_imagemagick_path():
+    # 1. Check Local Folder (For Portable/Bundled Mode)
+    local_magick = os.path.join(os.getcwd(), "magick.exe")
+    if os.path.exists(local_magick):
+        logger.info(f"✅ Using Bundled ImageMagick: {local_magick}")
+        return local_magick
+
     if IS_WINDOWS:
-        # Check common install locations or use a local override
+        # 2. Check common install locations
         # Try to find magick in PATH first
         path = shutil.which("magick")
         if path: return path
         
-        # Fallback to hardcoded Program Files (Legacy support)
-        # In a real app, we might want to bundle this or ask the user
+        # 3. Fallback to hardcoded Program Files (Legacy support)
         possible_paths = [
             r"C:\Program Files\ImageMagick-7.1.2-Q16\magick.exe",
             r"C:\Program Files\ImageMagick-7.1.2-Q16-HDRI\magick.exe"
         ]
         for p in possible_paths:
             if os.path.exists(p):
+                logger.info(f"⚠️ Using System ImageMagick: {p}")
                 return p
         return None
     else:
@@ -57,7 +63,11 @@ def get_imagemagick_path():
         return shutil.which("magick") or shutil.which("convert")
 
 def get_ffmpeg_path():
-    # MoviePy usually handles this, but if we need explicit control:
+    # 1. Check Local Folder
+    local_ffmpeg = os.path.join(os.getcwd(), "ffmpeg.exe")
+    if os.path.exists(local_ffmpeg):
+        logger.info(f"✅ Using Bundled FFmpeg: {local_ffmpeg}")
+        return local_ffmpeg
     return shutil.which("ffmpeg")
 
 IMAGEMAGICK_BINARY = get_imagemagick_path()
