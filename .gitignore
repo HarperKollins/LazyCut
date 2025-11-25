@@ -1,21 +1,46 @@
-# --- SECRETS (NEVER UPLOAD THESE) ---
-.env
+# Python
 __pycache__/
-*.log
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
 
-# --- BIG MEDIA FILES (IGNORED) ---
+# Virtual Env
+venv/
+.venv/
+env/
+ENV/
+
+# Environment Variables
+.env
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+
+# LazyCut Specific
 *.mp4
-*.mov
 *.wav
-*.mp3
-*.png
-*.jpg
-
-# --- FOLDERS TO IGNORE ---
-input/
+*.log
+temp/
+brolls/
+assets/
 output/
 archive/
-random/
-batch*/
-.venv/
-venv/

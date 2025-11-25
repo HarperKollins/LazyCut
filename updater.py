@@ -1,84 +1,86 @@
-import requests
 import os
 import sys
+import requests
+import logging
 import subprocess
+import time
 from packaging import version
-import tkinter.messagebox as messagebox
+from config import VERSION, GITHUB_REPO, TEMP_DIR, IS_WINDOWS
 
-# --- CONFIG ---
-CURRENT_VERSION = "2.0.0"  # UPDATE THIS when you release new versions!
-REPO_OWNER = "HarperKollins"
-REPO_NAME = "LazyCut"
-GITHUB_URL = f"https://api.github.com/repos/{REPO_OWNER}/{REPO_NAME}/releases/latest"
+logger = logging.getLogger('LazyCut.Updater')
 
 def check_for_updates():
-    print(f"🔍 Checking for updates... (Current: {CURRENT_VERSION})")
-    
+    """
+    Checks GitHub for a newer release.
+    Returns (bool, str, str): (update_available, latest_version, download_url)
+    """
     try:
-        # 1. Get latest info from GitHub
-        response = requests.get(GITHUB_URL)
-        if response.status_code != 200:
-            print("⚠️ Could not connect to GitHub.")
-            return
-
+        url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+        response = requests.get(url, timeout=5)
+        response.raise_for_status()
+        
         data = response.json()
-        latest_tag = data['tag_name'].replace('v', '') # Remove 'v' if you use 'v2.1'
+        latest_tag = data.get("tag_name", "v0.0.0").lstrip("v")
         
-        # 2. Compare Versions
-        if version.parse(latest_tag) > version.parse(CURRENT_VERSION):
-            print(f"🚨 New Version Found: {latest_tag}")
+        if version.parse(latest_tag) > version.parse(VERSION):
+            logger.info(f"🚀 New version available: {latest_tag} (Current: {VERSION})")
             
-            # Ask User
-            do_update = messagebox.askyesno(
-                "Update Available", 
-                f"LazyCut v{latest_tag} is out!\n\nDo you want to update now?"
-            )
+            # Find the correct asset
+            download_url = None
+            asset_name_filter = ".exe" if IS_WINDOWS else ".AppImage" # Example filter
             
-            if do_update:
-                download_and_install(data['assets'])
+            for asset in data.get("assets", []):
+                if asset_name_filter in asset["name"]:
+                    download_url = asset["browser_download_url"]
+                    break
+            
+            return True, latest_tag, download_url
         else:
-            print("✅ App is up to date.")
-
-    except Exception as e:
-        print(f"❌ Update check failed: {e}")
-
-def download_and_install(assets):
-    # Find the .exe asset
-    download_url = None
-    for asset in assets:
-        if asset['name'].endswith(".exe"):
-            download_url = asset['browser_download_url']
-            break
+            logger.info("✅ App is up to date.")
+            return False, latest_tag, None
             
-    if not download_url:
-        messagebox.showerror("Error", "Could not find the installer file.")
-        return
-
-    print("⬇️ Downloading update...")
-    
-    # Download to Temp folder
-    installer_path = os.path.join(os.getenv('TEMP'), "LazyCut_Update.exe")
-    
-    try:
-        with requests.get(download_url, stream=True) as r:
-            r.raise_for_status()
-            with open(installer_path, 'wb') as f:
-                for chunk in r.iter_content(chunk_size=8192):
-                    f.write(chunk)
-        
-        print("✅ Download Complete. Installing...")
-        
-        # 3. RUN INSTALLER SILENTLY & CLOSE APP
-        # /SILENT = Installs without asking questions
-        # /CLOSEAPPLICATIONS = Tries to close the running LazyCut
-        subprocess.Popen([installer_path, "/SILENT", "/CLOSEAPPLICATIONS"])
-        
-        # Kill current app immediately
-        sys.exit(0)
-        
     except Exception as e:
-        messagebox.showerror("Update Failed", str(e))
+        logger.error(f"❌ Update check failed: {e}")
+        return False, None, None
 
-# Test it (Only runs if you click play on this file directly)
+def download_and_install_update(download_url, new_version):
+    """
+    Downloads the update and triggers the installer/executable.
+    """
+    try:
+        logger.info(f"⬇️ Downloading update from {download_url}...")
+        response = requests.get(download_url, stream=True)
+        response.raise_for_status()
+        
+        filename = os.path.basename(download_url)
+        save_path = os.path.join(TEMP_DIR, filename)
+        
+        with open(save_path, 'wb') as f:
+            for chunk in response.iter_content(chunk_size=8192):
+                f.write(chunk)
+                
+        logger.info("✅ Download complete. Starting update...")
+        
+        if IS_WINDOWS:
+            # In a real scenario, this would likely be an installer or a self-replacing exe.
+            # For this script, we'll simulate by launching the new exe and exiting.
+            subprocess.Popen([save_path, "--silent"])
+            sys.exit(0)
+        else:
+            # Linux: Make executable and run
+            os.chmod(save_path, 0o755)
+            subprocess.Popen([save_path])
+            sys.exit(0)
+            
+    except Exception as e:
+        logger.error(f"❌ Update failed: {e}")
+        return False
+
 if __name__ == "__main__":
-    check_for_updates()
+    # Test run
+    logging.basicConfig(level=logging.INFO)
+    avail, ver, url = check_for_updates()
+    if avail:
+        print(f"Update found: {ver} -> {url}")
+    else:
+        print("No update found.")
