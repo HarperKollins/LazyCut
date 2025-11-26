@@ -1,39 +1,18 @@
 # -*- mode: python ; coding: utf-8 -*-
 from PyInstaller.utils.hooks import collect_all
-import sys
-import os
+from PyInstaller.utils.hooks import copy_metadata
 
-block_cipher = None
-
-# --- COLLECT DEPENDENCIES ---
-datas = []
+datas = [('C:\\Users\\ASUS\\AppData\\Roaming\\Python\\Python313\\site-packages\\customtkinter', 'customtkinter')]
 binaries = []
-hiddenimports = [
-    'customtkinter', 
-    'moviepy', 
-    'whisper', 
-    'google.generativeai', 
-    'PIL', 
-    'colorlog', 
-    'updater', 
-    'packaging', 
-    'requests', 
-    'soundfile', 
-    'torch'
-]
-
-# Collect customtkinter data
-tmp_ret = collect_all('customtkinter')
+hiddenimports = []
+datas += copy_metadata('imageio')
+datas += copy_metadata('moviepy')
+tmp_ret = collect_all('imageio')
+datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
+tmp_ret = collect_all('moviepy')
 datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
-# Collect whisper data (if needed, usually handled by hook-whisper but good to be safe)
-tmp_ret = collect_all('whisper')
-datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
-# Add Assets
-datas += [('assets', 'assets'), ('brolls', 'brolls')]
-
-# --- ANALYSIS ---
 a = Analysis(
     ['app.py'],
     pathex=[],
@@ -44,14 +23,11 @@ a = Analysis(
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
     noarchive=False,
+    optimize=0,
 )
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+pyz = PYZ(a.pure)
 
-# --- EXE ---
 exe = EXE(
     pyz,
     a.scripts,
@@ -62,20 +38,17 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False, # Hide console for GUI app
+    console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None, # Add icon if available, e.g. 'assets/icon.ico'
+    icon=['icon.ico'],
 )
-
-# --- COLLECT ---
 coll = COLLECT(
     exe,
     a.binaries,
-    a.zipfiles,
     a.datas,
     strip=False,
     upx=True,
