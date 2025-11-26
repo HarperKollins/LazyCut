@@ -44,3 +44,4 @@ brolls/
 assets/
 output/
 archive/
+*.db

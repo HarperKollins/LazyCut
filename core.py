@@ -50,7 +50,7 @@ class LazyCutCore:
 
         import torch
         import soundfile as sf
-        import google.generativeai as genai
+        # import google.generativeai as genai # Moved to Server
         import PIL.Image
         import whisper
         from moviepy.editor import VideoFileClip, concatenate_videoclips, TextClip, CompositeVideoClip
@@ -65,15 +65,13 @@ class LazyCutCore:
         if IMAGEMAGICK_BINARY:
             change_settings({"IMAGEMAGICK_BINARY": IMAGEMAGICK_BINARY})
 
-        # Setup GenAI
-        load_dotenv()
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            logger.error("❌ GEMINI_API_KEY not found in .env!")
-            if callback: callback("❌ Error: GEMINI_API_KEY missing.")
-            return
-            
-        genai.configure(api_key=api_key)
+        # Setup GenAI (Removed - Moved to Server)
+        # load_dotenv()
+        # api_key = os.getenv("GEMINI_API_KEY")
+        # if not api_key: ...
+        
+        # Load Requests (for Server API)
+        import requests
 
         # Load Whisper
         if callback: callback("🔌 Loading Whisper Model...")
@@ -145,7 +143,17 @@ class LazyCutCore:
             logger.warning(f"⚠️ Failed to load B-Roll {selected_path}: {e}")
             return None
 
-    def process_single_video(self, v_path, folder_path):
+            bc = bc.without_audio()
+            return bc
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to load B-Roll {selected_path}: {e}")
+            return None
+
+    # Removed scale_to_hd to strictly preserve source dimensions
+    # No resizing, no scaling, no cropping.
+
+
+    def process_single_video(self, v_path, folder_path, callback=None):
         fname = os.path.basename(v_path)
         unique_id = str(uuid.uuid4())[:8]
         temp_audio = os.path.join(folder_path, f"temp_{unique_id}.wav")
@@ -153,6 +161,8 @@ class LazyCutCore:
         try:
             video = VideoFileClip(v_path)
             if video.audio is None:
+                logger.warning(f"⚠️ Skipped {fname}: No audio track found.")
+                if callback: callback(f"⚠️ Skipped {fname}: No audio track found.")
                 video.close()
                 return None
 
@@ -160,6 +170,7 @@ class LazyCutCore:
             video.close()
             
             # VAD
+            if callback: callback(f"🎙️ Analyzing Audio (VAD)...")
             if os.path.getsize(temp_audio) < 1000: 
                 vad_data = []
             else:
@@ -179,6 +190,7 @@ class LazyCutCore:
                     vad_data = [{'start': st['start']/16000, 'end': st['end']/16000} for st in speech_timestamps]
 
             # Whisper
+            if callback: callback(f"📝 Transcribing Speech (Whisper)...")
             try:
                 transcription = whisper_model.transcribe(v_path, word_timestamps=True)
                 segments = transcription["segments"]
@@ -190,12 +202,16 @@ class LazyCutCore:
 
         except Exception as e:
             logger.error(f"❌ Error on {fname}: {e}")
+            if callback: callback(f"❌ Error on {fname}: {e}")
             return None
 
     def get_director_cut(self, library):
-        model = genai.GenerativeModel("models/gemini-2.5-pro")
+        # --- SERVER-SIDE AI LOGIC ---
+        SERVER_URL = "http://localhost:8000/process_script"
+        
         all_sentences = []
         global_id = 0
+        transcript_parts = []
         
         for video in library:
             for seg in video['segments']:
@@ -207,34 +223,57 @@ class LazyCutCore:
                     "end": seg['end'],
                     "words": seg.get('words', [])
                 })
+                transcript_parts.append(seg['text'])
                 global_id += 1
 
-        prompt = f"""
-        Act as a World-Class Documentary Editor.
-        GOAL: Create a cohesive, emotional narrative from these raw takes.
-        INSTRUCTIONS:
-        1. Linear Storytelling: Hook -> Problem -> Agitation -> Solution -> CTA.
-        2. Anti-Loop: Select best take, no duplicates.
-        3. Fluff Removal: No Umms, pauses, restarts.
-        4. Pacing: Natural flow.
+        # Generate Hardware ID
+        hw_id = str(uuid.getnode())
+
+        # Join transcript parts into a single string
+        full_transcript = " ".join(transcript_parts)
         
-        RAW TRANSCRIPT DATA:
-        {json.dumps(all_sentences, indent=2)}
-        
-        RETURN JSON: {{ "selected_sequence": [ID_LIST] }}
-        """
+        if not full_transcript.strip():
+            logger.warning("⚠️ Transcript is empty. No speech detected.")
+            return "EMPTY_TRANSCRIPT", []
+
+        payload = {
+            "hardware_id": hw_id,
+            "transcript": full_transcript
+        }
         
         try:
-            logger.info(f"🧠 The Director is crafting the narrative...")
-            response = model.generate_content(prompt)
-            text = response.text.replace("```json", "").replace("```", "")
-            data = json.loads(text)
-            return data.get("selected_sequence", []), all_sentences
+            logger.info(f"🧠 Connecting to AI Director (Server)...")
+            import requests
+            response = requests.post(SERVER_URL, json=payload)
+            
+            if response.status_code == 403:
+                logger.warning("⚠️ Daily Limit Reached.")
+                return "LIMIT_REACHED", []
+            
+            if response.status_code != 200:
+                error_msg = f"Server Error {response.status_code}: {response.text}"
+                logger.error(error_msg)
+                return "SERVER_ERROR", error_msg
+
+            data = response.json()
+            indices = data.get("indices", [])
+            seo_title = data.get("seo_title", "Viral_Edit")
+            
+            if not indices:
+                logger.warning("⚠️ AI returned 0 selected clips.")
+                return [], [], "Viral_Edit"
+            
+            # Map indices back to global IDs
+            selected_sequence = [all_sentences[i]['global_id'] for i in indices if i < len(all_sentences)]
+            
+            logger.info(f"✨ SEO Title: {seo_title}")
+            return selected_sequence, all_sentences, seo_title
+
         except Exception as e:
             logger.error(f"Director Error: {e}")
-            return [], []
+            return "CONNECTION_ERROR", str(e)
 
-    def render_story(self, sequence_ids, all_sentences, full_library, folder_path, enable_captions=True, enable_broll=True, callback=None):
+    def render_story(self, sequence_ids, all_sentences, full_library, folder_path, seo_title="Viral_Edit", enable_captions=True, enable_broll=True, callback=None):
         logger.info(f"🏗️ Assembling Story...")
         if callback: callback("🏗️ Assembling Final Cut...")
         
@@ -284,6 +323,9 @@ class LazyCutCore:
                 clip = source_video.subclip(final_start, final_end)
                 clip = clip.audio_fadein(0.05).audio_fadeout(0.05)
                 
+                # STRICT SOURCE PRESERVATION: No resizing, no scaling.
+                # clip = self.scale_to_hd(clip)  <-- REMOVED
+                
                 # B-Roll
                 clip_duration = clip.duration
                 is_broll_candidate = (
@@ -297,6 +339,9 @@ class LazyCutCore:
                     b_dur = min(clip_duration, 3.0)
                     b_clip = self.get_broll_clip(sentence['text'], b_dur, broll_files, used_brolls)
                     if b_clip:
+                        # Resize B-roll to match main clip dimensions exactly
+                        if b_clip.size != clip.size:
+                            b_clip = b_clip.resize(newsize=clip.size)
                         b_clip = b_clip.set_start(0).set_position("center")
                         video_comp = CompositeVideoClip([clip, b_clip])
                         video_comp.audio = clip.audio
@@ -305,10 +350,17 @@ class LazyCutCore:
 
                 current_timeline_time += clip_duration
                 
-                # Zoom
+                # Ken Burns Zoom Effect (smooth zoom for visual interest)
                 if is_zoomed and clip.duration > 2.0:
-                    clip = clip.resize(height=int(source_video.h * 1.15)) 
-                    clip = clip.crop(x_center=clip.w/2, y_center=clip.h/2, width=source_video.w, height=source_video.h)
+                    def zoom_at_time(t):
+                        # Smooth zoom from 1.0x to 1.1x over clip duration
+                        progress = t / clip.duration
+                        return 1.0 + (0.1 * progress)
+                    
+                    # Apply zoom while maintaining aspect ratio
+                    clip = clip.resize(lambda t: zoom_at_time(t))
+                    # Scale back to ORIGINAL source dimensions (not HD)
+                    clip = clip.resize(newsize=source_video.size)
                 
                 # Captions
                 if enable_captions and len(sentence.get('words', [])) > 0:
@@ -342,7 +394,13 @@ class LazyCutCore:
                 if callback: callback("❌ Error: No clips generated.")
                 return
 
-            output_file = os.path.join(folder_path, "FINAL_HUMAN_EDIT.mp4")
+            # Use SEO title for filename with robust sanitization
+            # Remove any non-alphanumeric characters except underscores and hyphens
+            safe_title = "".join(c for c in seo_title if c.isalnum() or c in ('_', '-'))
+            safe_title = safe_title.strip()
+            if not safe_title: safe_title = "Viral_Edit"
+            
+            output_file = os.path.join(folder_path, f"{safe_title}.mp4")
             if os.path.exists(output_file):
                 try: os.remove(output_file)
                 except: pass
@@ -392,7 +450,7 @@ class LazyCutCore:
             if self.stop_event.is_set(): return
             if callback: callback(f"Processing Video {i+1}/{len(video_files)}: {os.path.basename(v_path)}")
             
-            result = self.process_single_video(v_path, folder_path)
+            result = self.process_single_video(v_path, folder_path, callback)
             if result:
                 full_library.append(result)
         
@@ -401,9 +459,39 @@ class LazyCutCore:
             return
 
         if callback: callback("🧠 AI Director is analyzing footage...")
-        sequence_ids, all_sentences = self.get_director_cut(full_library)
+        result = self.get_director_cut(full_library)
         
-        if sequence_ids:
-            self.render_story(sequence_ids, all_sentences, full_library, folder_path, enable_captions, enable_broll, callback)
+        # Handle different return types from get_director_cut
+        if isinstance(result, tuple) and len(result) == 3:
+            sequence_ids, all_sentences, seo_title = result
+        elif isinstance(result, tuple) and len(result) == 2:
+            # Error cases return 2 values
+            sequence_ids, all_sentences = result
+            seo_title = "Viral_Edit"
         else:
-            if callback: callback("❌ Director failed to create a sequence.")
+            sequence_ids = result
+            all_sentences = []
+            seo_title = "Viral_Edit"
+        
+        if sequence_ids == "LIMIT_REACHED":
+            if callback: callback("🚫 Daily Limit Reached (3/3). Upgrade to Pro.")
+            raise Exception("Daily Limit Reached")
+            
+        if sequence_ids == "EMPTY_TRANSCRIPT":
+            if callback: callback("⚠️ No speech detected in videos. Cannot edit.")
+            return
+
+        if sequence_ids == "SERVER_ERROR":
+            msg = all_sentences # In this case, we returned error msg in second arg
+            if callback: callback(f"❌ {msg}")
+            return
+
+        if sequence_ids == "CONNECTION_ERROR":
+            msg = all_sentences
+            if callback: callback(f"❌ Connection Failed: {msg}")
+            return
+
+        if sequence_ids:
+            self.render_story(sequence_ids, all_sentences, full_library, folder_path, seo_title, enable_captions, enable_broll, callback)
+        else:
+            if callback: callback("❌ Director returned 0 clips (AI found nothing interesting).")

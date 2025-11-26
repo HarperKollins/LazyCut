@@ -38,6 +38,10 @@ class LazyCutApp(ctk.CTk):
         self.title(f"{APP_NAME} v{VERSION}")
         self.geometry("800x600")
         self.resizable(True, True)
+        
+        # Set Icon
+        if os.path.exists("icon.ico"):
+            self.iconbitmap("icon.ico")
 
         # Grid Layout
         self.grid_columnconfigure(0, weight=1)
@@ -143,7 +147,10 @@ class LazyCutApp(ctk.CTk):
                 callback=self.log_callback
             )
         except Exception as e:
-            print(f"❌ Critical Error: {e}")
+            if "Daily Limit Reached" in str(e):
+                messagebox.showwarning("Limit Reached", "🚫 Daily Limit Reached (3/3).\nPlease upgrade to Pro for unlimited access.")
+            else:
+                print(f"❌ Critical Error: {e}")
         finally:
             self.after(0, self.reset_ui)
 
