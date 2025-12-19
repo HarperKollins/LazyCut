@@ -1,87 +1,98 @@
 import os
-import sys
-import platform
+import json
 import shutil
 import logging
+from pathlib import Path
 
-# --- LOGGING SETUP ---
+# --- CONSTANTS ---
+APP_NAME = "LazyCut"
+VERSION = "2.0.0"
+SERVER_URL = "http://localhost:8000/process_script"  # Change to cloud URL in production
+GITHUB_REPO = "HarperKollins/LazyCut"
+TEMP_DIR = os.path.join(os.getcwd(), "temp")
+IS_WINDOWS = os.name == 'nt'
+
+# --- PATHS ---
+# Use %APPDATA% on Windows, ~/.config on Linux/Mac
+if os.name == 'nt':
+    CONFIG_DIR = os.path.join(os.environ['APPDATA'], APP_NAME)
+else:
+    CONFIG_DIR = os.path.join(str(Path.home()), ".config", APP_NAME)
+
+SETTINGS_FILE = os.path.join(CONFIG_DIR, "settings.json")
+BROLL_FOLDER = os.path.join(os.getcwd(), "brolls")
+
+# --- LOGGING ---
 def setup_logging():
-    logger = logging.getLogger('LazyCut')
-    logger.setLevel(logging.INFO)
-    if not logger.handlers:
-        handler = logging.StreamHandler()
-        formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-    return logger
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s [%(levelname)s] %(message)s",
+        handlers=[
+            logging.StreamHandler(),
+            logging.FileHandler("lazycut.log", mode='w')
+        ]
+    )
+    return logging.getLogger(APP_NAME)
 
 logger = setup_logging()
 
-# --- DETERMINE PATHS ---
-# 1. APP_DIR: Where the code/exe lives (READ ONLY in Program Files)
-if getattr(sys, 'frozen', False):
-    APP_DIR = sys._MEIPASS
-else:
-    APP_DIR = os.path.dirname(os.path.abspath(__file__))
-
-# 2. WORK_DIR: Where we save files (READ/WRITE PERMISSION)
-# We use %APPDATA% (e.g., C:\Users\You\AppData\Roaming\LazyCut)
-USER_DATA = os.path.join(os.getenv('APPDATA'), "LazyCut")
-
-# Define folders inside the Safe Zone
-INPUT_DIR = os.path.join(USER_DATA, "input")
-OUTPUT_DIR = os.path.join(USER_DATA, "output")
-BROLLS_DIR = os.path.join(USER_DATA, "brolls")
-ASSETS_DIR = os.path.join(USER_DATA, "assets")
-TEMP_DIR = os.path.join(USER_DATA, "temp")
-BROLL_FOLDER = BROLLS_DIR # Alias for core.py compatibility
-
-# Create them safely
-dirs = [INPUT_DIR, OUTPUT_DIR, BROLLS_DIR, ASSETS_DIR, TEMP_DIR]
-for d in dirs:
-    os.makedirs(d, exist_ok=True)
-
-# --- PATHS TO BINARIES ---
-current_os = platform.system()
-IS_WINDOWS = current_os == 'Windows'
-
-if current_os == "Windows":
-    # Look for binaries in the Installation Folder (APP_DIR)
-    # When frozen, sys._MEIPASS contains the bundled files.
-    IM_PATH = os.path.join(APP_DIR, "magick.exe")
-    FFMPEG_PATH = os.path.join(APP_DIR, "ffmpeg.exe")
-    
-    # Fallback for Dev Mode (Script run)
-    if not getattr(sys, 'frozen', False):
-        # Check local folder
-        local_magick = os.path.join(os.getcwd(), "magick.exe")
-        if os.path.exists(local_magick):
-            IM_PATH = local_magick
-        else:
-             # Check common install locations
-            possible_paths = [
-                r"C:\Program Files\ImageMagick-7.1.2-Q16\magick.exe",
-                r"C:\Program Files\ImageMagick-7.1.2-Q16-HDRI\magick.exe"
+# --- BINARY DISCOVERY ---
+def get_binary_path(binary_name):
+    """
+    Finds the path to a binary (ffmpeg, magick) using shutil.which.
+    """
+    path = shutil.which(binary_name)
+    if not path:
+        # Common fallback paths for Windows
+        if os.name == 'nt':
+            common_paths = [
+                f"C:\\Program Files\\{binary_name}\\{binary_name}.exe",
+                f"C:\\ffmpeg\\bin\\{binary_name}.exe",
+                f"C:\\Program Files\\ImageMagick-7.1.2-Q16\\{binary_name}.exe"
             ]
-            for p in possible_paths:
+            for p in common_paths:
                 if os.path.exists(p):
-                    IM_PATH = p
-                    break
-        
-        local_ffmpeg = os.path.join(os.getcwd(), "ffmpeg.exe")
-        if os.path.exists(local_ffmpeg):
-            FFMPEG_PATH = local_ffmpeg
-        else:
-            sys_ffmpeg = shutil.which("ffmpeg")
-            if sys_ffmpeg: FFMPEG_PATH = sys_ffmpeg
+                    return p
+    return path
 
-else:
-    IM_PATH = shutil.which("magick") or shutil.which("convert")
-    FFMPEG_PATH = shutil.which("ffmpeg")
+FFMPEG_BINARY = get_binary_path("ffmpeg")
+IMAGEMAGICK_BINARY = get_binary_path("magick")
 
-IMAGEMAGICK_BINARY = IM_PATH
+# Check for critical binaries
+if not FFMPEG_BINARY:
+    logger.warning("⚠️ FFmpeg not found! Video processing will fail.")
 
-# --- APP INFO ---
-APP_NAME = "LazyCut"
-VERSION = "2.0.0"
-GITHUB_REPO = "HarperKollins/LazyCut"
+if not IMAGEMAGICK_BINARY:
+    logger.warning("ImageMagick not found! Text rendering may fail.")
+
+# --- SETTINGS MANAGER ---
+def load_settings():
+    """Loads settings from JSON file."""
+    if not os.path.exists(SETTINGS_FILE):
+        return {}
+    try:
+        with open(SETTINGS_FILE, 'r') as f:
+            return json.load(f)
+    except Exception as e:
+        logger.error(f"Failed to load settings: {e}")
+        return {}
+
+def save_settings(key, value):
+    """Saves a single setting key-value pair."""
+    if not os.path.exists(CONFIG_DIR):
+        os.makedirs(CONFIG_DIR)
+    
+    settings = load_settings()
+    settings[key] = value
+    
+    try:
+        with open(SETTINGS_FILE, 'w') as f:
+            json.dump(settings, f, indent=4)
+        logger.info(f"Saved setting: {key} = {value}")
+    except Exception as e:
+        logger.error(f"Failed to save settings: {e}")
+
+def get_setting(key, default=None):
+    """Retrieves a setting value."""
+    settings = load_settings()
+    return settings.get(key, default)

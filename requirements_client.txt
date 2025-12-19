@@ -1,0 +1,13 @@
+customtkinter
+openai-whisper
+whisperx
+mediapipe
+ffmpeg-python
+sentence-transformers
+requests
+moviepy
+packaging
+torch
+numpy
+soundfile
+scipy

@@ -11,3 +11,4 @@ torch
 numpy
 pillow
 imageio_ffmpeg
+PySide6>=6.5.0

@@ -17,13 +17,16 @@ def check_for_updates():
     try:
         url = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
         response = requests.get(url, timeout=5)
+        if response.status_code == 404:
+            logger.warning("GitHub release not found (Repo might be private).")
+            return False, None, None
         response.raise_for_status()
         
         data = response.json()
         latest_tag = data.get("tag_name", "v0.0.0").lstrip("v")
         
         if version.parse(latest_tag) > version.parse(VERSION):
-            logger.info(f"🚀 New version available: {latest_tag} (Current: {VERSION})")
+            logger.info(f"New version available: {latest_tag} (Current: {VERSION})")
             
             # Find the correct asset
             download_url = None
@@ -36,11 +39,11 @@ def check_for_updates():
             
             return True, latest_tag, download_url
         else:
-            logger.info("✅ App is up to date.")
+            logger.info("App is up to date.")
             return False, latest_tag, None
             
     except Exception as e:
-        logger.error(f"❌ Update check failed: {e}")
+        logger.error(f"Update check failed: {e}")
         return False, None, None
 
 def download_and_install_update(download_url, new_version):

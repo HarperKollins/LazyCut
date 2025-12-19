@@ -1,11 +1,18 @@
 import customtkinter as ctk
 import threading
 import sys
+if sys.platform.startswith("win"):
+    import codecs
+    try:
+        sys.stdout = codecs.getwriter("utf-8")(sys.stdout.detach())
+        sys.stderr = codecs.getwriter("utf-8")(sys.stderr.detach())
+    except Exception: pass
+
 import os
 import logging
-from tkinter import filedialog, messagebox
-from core import LazyCutCore
-from config import APP_NAME, VERSION
+from tkinter import filedialog, messagebox, simpledialog
+from core import LazyCutCore, LimitReachedException
+from config import APP_NAME, VERSION, save_settings, load_settings
 from updater import check_for_updates, download_and_install_update
 
 # --- THEME CONFIG ---
@@ -17,11 +24,17 @@ class TextRedirector(object):
         self.widget = widget
         self.tag = tag
 
-    def write(self, str):
-        self.widget.configure(state="normal")
-        self.widget.insert("end", str, (self.tag,))
-        self.widget.see("end")
-        self.widget.configure(state="disabled")
+    def write(self, str_val):
+        try:
+            self.widget.configure(state="normal")
+            # Filter out characters that might cause encoding issues in Tkinter/Console if needed
+            # But usually Tkinter handles unicode fine. The error was in logging stream.
+            # We just ensure we don't crash.
+            self.widget.insert("end", str_val, (self.tag,))
+            self.widget.see("end")
+            self.widget.configure(state="disabled")
+        except Exception:
+            pass
         
     def flush(self):
         pass
@@ -36,10 +49,9 @@ class LazyCutApp(ctk.CTk):
 
         # Window Setup
         self.title(f"{APP_NAME} v{VERSION}")
-        self.geometry("800x600")
+        self.geometry("900x650")
         self.resizable(True, True)
         
-        # Set Icon
         if os.path.exists("icon.ico"):
             self.iconbitmap("icon.ico")
 
@@ -56,7 +68,31 @@ class LazyCutApp(ctk.CTk):
             text=f"{APP_NAME} v{VERSION}", 
             font=("Roboto Medium", 20)
         )
-        self.header_label.pack(pady=10)
+        self.header_label.pack(side="left", padx=20, pady=10)
+
+        # Manual Editor Button
+        self.btn_manual_editor = ctk.CTkButton(
+            self.header_frame,
+            text="🎬 Manual Editor",
+            width=140,
+            fg_color="#6c5ce7",
+            text_color="white",
+            hover_color="#5b4cdb",
+            command=self.launch_manual_editor
+        )
+        self.btn_manual_editor.pack(side="right", padx=10, pady=10)
+
+        # Auth Button
+        self.btn_auth = ctk.CTkButton(
+            self.header_frame,
+            text="🔑 Login / Upgrade",
+            width=120,
+            fg_color="#E5B80B", # Gold color
+            text_color="black",
+            hover_color="#C49B09",
+            command=self.open_auth_dialog
+        )
+        self.btn_auth.pack(side="right", padx=20, pady=10)
 
         # --- 2. CONTROLS ---
         self.control_frame = ctk.CTkFrame(self)
@@ -110,18 +146,47 @@ class LazyCutApp(ctk.CTk):
 
         # --- 4. AUTO UPDATE CHECK ---
         self.after(1000, self.run_update_check)
+        self.update_auth_status()
+
+    def launch_manual_editor(self):
+        """Launch the Manual Video Editor as a separate process."""
+        import subprocess
+        print("🎬 Launching Manual Editor...")
+        try:
+            subprocess.Popen(
+                [sys.executable, "-m", "manual_editor.app"],
+                cwd=os.path.dirname(os.path.abspath(__file__)),
+                creationflags=subprocess.CREATE_NEW_CONSOLE if sys.platform == "win32" else 0
+            )
+            print("✅ Manual Editor launched successfully!")
+        except Exception as e:
+            print(f"❌ Failed to launch Manual Editor: {e}")
+            messagebox.showerror("Error", f"Failed to launch Manual Editor:\n{e}")
+
+    def update_auth_status(self):
+        settings = load_settings()
+        key = settings.get("license_key")
+        if key:
+            self.btn_auth.configure(text="👑 Pro Active", fg_color="green", text_color="white")
+        else:
+            self.btn_auth.configure(text="🔑 Login / Upgrade", fg_color="#E5B80B", text_color="black")
+
+    def open_auth_dialog(self):
+        key = simpledialog.askstring("License Key", "Enter your Pro License Key:")
+        if key:
+            save_settings("license_key", key.strip())
+            messagebox.showinfo("Success", "License Key Saved!")
+            self.update_auth_status()
 
     def select_folder(self):
         folder = filedialog.askdirectory()
         if folder:
             self.selected_folder = folder
-            # Count videos
             videos = [f for f in os.listdir(folder) if f.endswith('.mp4')]
             self.lbl_folder.configure(text=f"{folder} ({len(videos)} videos)", text_color="white")
             print(f"📂 Selected: {folder}")
 
     def log_callback(self, message):
-        # Thread-safe GUI update
         self.after(0, lambda: print(message))
 
     def start_processing(self):
@@ -134,7 +199,6 @@ class LazyCutApp(ctk.CTk):
 
         self.btn_start.configure(state="disabled", text="Processing...")
         
-        # Run in thread
         self.processing_thread = threading.Thread(target=self.run_core)
         self.processing_thread.start()
 
@@ -146,17 +210,16 @@ class LazyCutApp(ctk.CTk):
                 enable_broll=self.check_broll.get(),
                 callback=self.log_callback
             )
+        except LimitReachedException:
+            self.after(0, lambda: messagebox.showwarning("Limit Reached", "🚫 Daily Limit Reached (4/4).\n\nPlease Upgrade to Pro for unlimited access."))
         except Exception as e:
-            if "Daily Limit Reached" in str(e):
-                messagebox.showwarning("Limit Reached", "🚫 Daily Limit Reached (3/3).\nPlease upgrade to Pro for unlimited access.")
-            else:
-                print(f"❌ Critical Error: {e}")
+            print(f"❌ Critical Error: {e}")
         finally:
             self.after(0, self.reset_ui)
 
     def reset_ui(self):
         self.btn_start.configure(state="normal", text="START PROCESSING")
-        messagebox.showinfo("Done", "Processing Complete!")
+        print("Done.")
 
     def run_update_check(self):
         def _check():
